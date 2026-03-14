@@ -23,7 +23,7 @@ def client_send(state: cm.ClientState):
                 if not state.startdt_confirmed:
                     log.debug(f'Передача запрещена, событие {event} игнорируем')
                     continue
-                packet = prt.build_i_frame(state, event)
+                packet = prt.build_i_frame(state, event)                   
                 if packet is not None:
                     state.conn.send(packet)
                 state.last_send = time.time()
@@ -121,10 +121,13 @@ def server_handler(stop_thread: Callable, cl: Callable, sg: Callable, log):
                 print(addr, state)
         elif cmd == 'addr':
             cm.print_signals(sg.get_all())
-                
-        if len(spl_cmd) == 3:
+        elif len(spl_cmd) == 3:
             if spl_cmd[0] == 'set':
-                res = sg.update_val(int(spl_cmd[1]), spl_cmd[2])
+                res = sg.update_val(float(spl_cmd[1]), id=int(spl_cmd[2]))
+                if res:
+                    cm.print_signals(sg.get_all())
+            elif spl_cmd[0] == 'setioa':
+                res = sg.update_val(float(spl_cmd[1]), ioa=int(spl_cmd[2]))
                 if res:
                     cm.print_signals(sg.get_all())
             elif spl_cmd[0] == 'imit':
@@ -181,6 +184,8 @@ def main(conf:cm.Conf):
                 state.conf = conf
                 state.log = cm.logging.getLogger(f'{conf.log_name}.{addr[0]}:{addr[1]}')
                 state.out_que = queue.Queue()
+                state.on_command = lambda val, ioa: data_storage.update_val(val, ioa=ioa)
+                state.on_gi = data_storage.get_all_for_gi
                 data_storage.subscribe(addr, state.out_que)
                 client_storage.add_client(state)
                 # Старт отправки данных 

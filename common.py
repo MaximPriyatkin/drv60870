@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 import tomllib
 import queue
-from typing import Optional, Any
+from typing import Optional, Any, Callable, Iterable
 import socket
 from threading import Lock, Event
 import const
@@ -90,6 +90,7 @@ class SignalConf:
     val: Any = 0.0
     ts: datetime =  field(default_factory=datetime.now)
     q: int = 0x00
+    threshold: Optional[float] = None
 
 @dataclass
 class IecEvent:
@@ -97,16 +98,32 @@ class IecEvent:
     ioa: int
     asdu: int
     val: Any
-    ts: datetime
-    q: int
+    ts: datetime = field(default_factory=datetime.now)
+    q: int = 0
+    cot: int = 3
 
 
 def create_data_storage():
     _signals = {}
+    _ioa_idx = {}
     _lock = Lock()
     _subs = {} 
 
-    def add_signal(id, ioa, asdu, name, val):
+    def get_all_for_gi():
+        with _lock:
+            snapshot = list(_signals.values())
+        for sg in snapshot:
+            yield IecEvent(
+                id=sg.id,
+                ioa=sg.ioa,
+                asdu=sg.asdu,
+                val=sg.val,
+                ts=sg.ts,
+                q=sg.q,
+                cot=20
+            )
+
+    def add_signal(id, ioa, asdu, name, val, threshold):
         with _lock:
             _signals[id] = SignalConf(
                 id = id,
@@ -115,12 +132,37 @@ def create_data_storage():
                 name = name,
                 val = val,
                 ts = datetime.now(),
+                threshold=threshold
             )
-
-    def update_val(id, new_val, new_q=0x00, ts=None):
+            if ioa in _ioa_idx:
+                raise ValueError(f'IOA {ioa} уже существует')
+            _ioa_idx[ioa] = id
+    
+    def update_val(new_val, *, id = None, ioa = None, new_q=0x00, ts=None):
+        if (id is not None) == (ioa is not None):
+            raise ValueError ('Нельзя определять id и ioa одновременно')
+        if ioa is not None:
+            id = _ioa_idx.get(ioa)
+        if id is None:
+            return False
+        
         with _lock:
             if id in _signals:
-                sg = _signals[id]
+                sg = _signals.get(id)
+                if not sg:
+                    return False
+                q_change = (new_q != sg.q)
+                val_change = False
+                if sg.threshold is not None:
+                    try:
+                        if abs(new_val - sg.val) >= sg.threshold:
+                            val_change = True
+                    except (TypeError, ValueError):
+                            val_change = (new_val != sg.val)
+                else:
+                    val_change =  (new_val != sg.val)
+                if not val_change and not q_change:
+                    return False
                 sg.ts = ts or datetime.now()
                 sg.val = new_val
                 sg.q = new_q
@@ -131,6 +173,8 @@ def create_data_storage():
                         val=sg.val, 
                         ts=sg.ts, 
                         q=sg.q)
+                if sg.asdu >=45: # не отправлять телеуправление после обновления состояния
+                    return True
                 for q in _subs.values():
                     q.put(event)
                 return True
@@ -153,9 +197,17 @@ def create_data_storage():
                            update_val=update_val,
                            get_all=get_all,
                            subscribe=subscribe,
-                           unsubscribe=unsubscribe)
+                           unsubscribe=unsubscribe,
+                           get_all_for_gi=get_all_for_gi)
 
-def load_signal(add_signal, ca, fname: str='signals.csv') :
+def load_signal(add_signal:Callable, ca:int, fname: str='signals.csv') :
+    """Функция загрузки конфигурации сигналов из файла csv
+
+    Args:
+        add_signal (Callable): функция добавления сигнала в create_data_storage
+        ca (int): номер КП, который нужно выбрать из базы
+        fname (str, optional): имя файла конфигурации сигналов. Defaults to 'signals.csv'.
+    """    
     with open(fname, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f, delimiter='\t')
         for row in reader:
@@ -163,12 +215,16 @@ def load_signal(add_signal, ca, fname: str='signals.csv') :
                 continue
             asdu = int(row['asdu'])
             val = get_val_by_asdu(asdu, row['val'])
+            if len(row['threshold']) > 0:
+                threshold = float(row['threshold'])
+            else:
+                threshold = None
             add_signal(int(row['id']),
                        int(row['ioa']),
                        asdu,
                        row['name'],
                        val,
-     
+                       threshold
             )
 
 def get_val_by_asdu(type_asdu:int, val:str):
@@ -179,7 +235,7 @@ def get_val_by_asdu(type_asdu:int, val:str):
         return float(val)
 
 def print_signals(sg_dict: dict):
-    header = f"{'ID':<8} | {'IOA':<8} | {'TYPE':<6} | {'Name':<15} | {'Value'}"
+    header = f"{'ID':<8} | {'IOA':<8} | {'TYPE':<6} | {'Name':<15} | {'Value':<8} | {'Threshold'}"
     separator = "-" * len(header)
     print('\n' + separator)
     print(header)
@@ -187,7 +243,7 @@ def print_signals(sg_dict: dict):
     sorted_sg = sorted(sg_dict.keys())
     for row in sorted_sg:
         sg = sg_dict[row]
-        print(f'{row:<8} | {sg.ioa:<8} | {sg.asdu:<6} | {sg.name:<15} | {sg.val}')
+        print(f'{row:<8} | {sg.ioa:<8} | {sg.asdu:<6} | {sg.name:<15} | {sg.val:<8} | {sg.threshold}')
     print(separator)
 
 
@@ -206,7 +262,8 @@ class ClientState:
     last_rec: float = field(default_factory=time.time)
     last_send: float = field(default_factory=time.time)
     out_que: Optional[queue.Queue] = None
-
+    on_command: Optional[Callable[[Any, int], None]] = None
+    on_gi: Optional[Callable[[], Iterable[IecEvent]]] = None
 
 def create_client_storage():
     _clients = {}

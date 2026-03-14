@@ -11,9 +11,10 @@ def build_i_frame(state: cm.ClientState, event) -> bytes|None:
     t_asdu = event.asdu 
     val = event.val 
     ts = event.ts 
-    q = event.q 
+    q = event.q
+    cot = event.cot 
     vsq = 0x01
-    cot_bytes = struct.pack('<H', 3)
+    cot_bytes = struct.pack('<H', cot)
     asdu_header = struct.pack('<BBBBH', t_asdu, vsq, cot_bytes[0], cot_bytes[1], state.ca)
     ioa_bytes = int.to_bytes(ioa, 3, 'little')
     if t_asdu in (1, 30):
@@ -26,6 +27,11 @@ def build_i_frame(state: cm.ClientState, event) -> bytes|None:
         body = ioa_bytes + struct.pack('<fB', float(val), q)
         if t_asdu == 36:
             body += datetime_to_cp56(ts)
+    elif t_asdu in (100,):
+        qoi = bytes([int(event.val) & 0xFF])
+        body = ioa_bytes + qoi
+    elif t_asdu in (31,): #заглушка
+        body = ioa_bytes
     else:
         state.log.error(f'Тип ASDU  {t_asdu} не поддерживается драйвером')
         return None
@@ -99,16 +105,22 @@ def handle_i_frame(frame: bytes, state: cm.ClientState):
         return None
              
     if type_id == const.AsduTypeId['C_IC_NA_1']: # общий опрос
-        return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
+        if state.on_gi and state.out_que:
+            for event in state.on_gi():
+                if event.asdu < 45: # не отправляем в общем опросе ТУ/ТР - можно спросить из конфигурации потом
+                    state.out_que.put(event)
+            state.out_que.put(cm.IecEvent(id=-1, ioa=0, asdu=100, val=0, ts=datetime.now(), cot=10))
+            return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
 
     if type_id == const.AsduTypeId['C_SC_NA_1']: # команда однопозиционная
         for ioa, data in parsed_obj:
-
             val = data[0] & 0x01
             log.info(f'C->S [COMMAND] IOA:{ioa} VAL:{val}')
+            if state.on_command:
+                success = state.on_command(val, ioa)
+                if not success:
+                    log.warning(f'Команда на IOA {ioa} отклонена')
         return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
-
-
     return None
 
 

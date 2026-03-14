@@ -20,5 +20,5 @@ addr = "signals.csv"
 
 [log]
 name = "DRV"
-lvl = "INFO"
+lvl = "DEBUG"
 fname = "srv.log"
