@@ -10,10 +10,10 @@ import common as cm
 import protocol as prt
 import imit as im
 
+# state в client_send/client_rec всегда инициализирован в main()
+# pyright: reportOptionalMemberAccess=false
+
 def client_send(state: cm.ClientState):
-    assert state.log is not None
-    assert state.out_que is not None
-    assert state.conn is not None
     log = state.log
     log.info('Поток отправки запущен')
     t = time.time()
