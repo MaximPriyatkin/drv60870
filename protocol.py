@@ -3,8 +3,9 @@ from datetime import datetime
 import const
 import common as cm
 
+# pyright: reportOptionalMemberAccess=false
+
 def build_i_frame(state: cm.ClientState, event) -> bytes|None:
-    assert state.log is not None
     log = state.log
     id = event.id
     ioa = event.ioa 
@@ -60,7 +61,6 @@ def proc_frame(frame: bytes, state: cm.ClientState):
     return 'S', handle_s_frame(frame, state)
 
 def handle_i_frame(frame: bytes, state: cm.ClientState):
-    assert state.log is not None
     log = state.log        
     n_s = struct.unpack('<H', frame[2:4])[0] >> 1
     n_r = struct.unpack('<H', frame[4:6])[0] >> 1
@@ -127,7 +127,6 @@ def handle_i_frame(frame: bytes, state: cm.ClientState):
 
 
 def handle_u_frame(frame: bytes, state: cm.ClientState):
-    assert state.log is not None
     u_type_byte = frame[2]
     log = state.log
     try:
