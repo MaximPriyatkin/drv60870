@@ -24,4 +24,4 @@ console_lvl = ""
 fname = "srv.log"
 backup = 5  # Количество сохраняемых файлов при ротации
 size = 2  # Размер лог-файла в мегабайтах
-i_frame_stats_every = 10000
+i_frame_stats_every = 1000

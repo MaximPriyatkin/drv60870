@@ -1,6 +1,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import sys
+import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from datetime import datetime
@@ -138,6 +139,7 @@ class IecEvent:
 def create_data_storage():
     _signals = {}
     _ioa_idx = {}
+    _name_idx = {}
     _lock = Lock()
     _subs = {} 
 
@@ -169,6 +171,7 @@ def create_data_storage():
             if ioa in _ioa_idx:
                 raise ValueError(f'IOA {ioa} уже существует')
             _ioa_idx[ioa] = id
+            _name_idx[name.lower()] = id
     
     def update_val(val, *, id = None, ioa = None, q=0, ts=None):
         if (id is not None) == (ioa is not None):
@@ -212,6 +215,14 @@ def create_data_storage():
         res = {}
         res[id] = _signals[id]
         return dict(res)
+    
+    def get_signal_by_name(name_patt:str):
+        res = {}
+        pattern = re.compile(f'^{name_patt}$')
+        for name, id in _name_idx.items():
+            if pattern.search(name):
+                res[id] = _signals[id]
+        return dict(res)
 
     def get_all():
         with _lock:
@@ -229,6 +240,7 @@ def create_data_storage():
     return SimpleNamespace(add_signal=add_signal,
                            update_val=update_val,
                            get_all=get_all,
+                           get_signal_by_name=get_signal_by_name,
                            subscribe=subscribe,
                            unsubscribe=unsubscribe,
                            get_all_for_gi=get_all_for_gi,
@@ -268,7 +280,16 @@ def get_val_by_asdu(type_asdu:int, val:str):
     if type_asdu in const.FLOAT_ASDU:
         return float(val)
 
+
 def print_signals(sg_dict: dict):
+    """_summary_
+
+    Args:
+        sg_dict (dict): _description_
+
+    """
+    if len(sg_dict) == 0:
+        return
     header = f"{'ID':<8} | {'IOA':<8} | {'TYPE':<6} | {'Name':<35} | {'Value':<8} | {'Threshold'}"
     separator = "-" * len(header)
     print('\n' + separator)
@@ -279,6 +300,8 @@ def print_signals(sg_dict: dict):
         sg = sg_dict[row]
         print(f'{row:<8} | {sg.ioa:<8} | {sg.asdu:<6} | {sg.name:<35} | {sg.val:<8} | {sg.threshold}')
     print(separator)
+
+
 
 
 # ---- Состояние клиентов ----

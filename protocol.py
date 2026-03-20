@@ -1,26 +1,63 @@
 import struct
 from datetime import datetime
 import const
+from const import AsduTypeId
 import common as cm
 
 # pyright: reportOptionalMemberAccess=false
 
-def _encode_obj(t_asdu, ev) -> bytes | None:
-    ioa_b = int.to_bytes(ev.ioa, 3, 'little')
-    if t_asdu in (1, 30):
-        body = ioa_b + bytes([ev.q | (int(ev.val) & 0x01)])
-        if t_asdu == 30:
-            body += datetime_to_cp56(ev.ts)
-    elif t_asdu in (13, 36):
-        body = ioa_b + struct.pack('<fB', float(ev.val), ev.q)
-        if t_asdu == 36:
-            body += datetime_to_cp56(ev.ts)
-    elif t_asdu == 100:
-        body = ioa_b + bytes([int(ev.val) & 0xFF])
-    elif t_asdu == 31:
-        body = ioa_b
-    else:
+def enc_siq(ev):  # 1, 30, 45 single point 1 + q & single command
+    return bytes([(int(ev.val) & 0x01) | (ev.q & 0xFE)])
+def enc_diq(ev):  # 3, 31 double point 2 + q
+    return bytes([(int(ev.val) & 0x03) | (ev.q & 0xFC)])
+def enc_qds_float(ev):  # 36, 45 measured float 4 + q
+    return struct.pack('<fB', float(ev.val), ev.q)
+def enc_vti(ev):  # 5, 32 step position + q
+    return struct.pack('<bB', int(ev.val), ev.q)
+def enc_nva(ev):  # 9,34,11,35 normailized value, measurement scaled
+    return struct.pack('<hB', int(ev.val), ev.q)
+def enc_bsi(ev):  # 7,33 bitstring
+    return struct.pack('<IB', int(ev.val), ev.q)
+def enc_bcr(ev):  # 15, 37 binary counter
+    return struct.pack('<iB', int(ev.val), ev.q)
+
+ENCODERS = {
+    # Без метки времени (Monitoring)
+    AsduTypeId.M_SP_NA_1: (enc_siq, False),
+    AsduTypeId.M_DP_NA_1: (enc_diq, False),
+    AsduTypeId.M_ST_NA_1: (enc_vti, False),
+    AsduTypeId.M_BO_NA_1: (enc_bsi, False),
+    AsduTypeId.M_ME_NA_1: (enc_nva, False),
+    AsduTypeId.M_ME_NB_1: (enc_nva, False),
+    AsduTypeId.M_ME_NC_1: (enc_qds_float, False),
+    AsduTypeId.M_IT_NA_1: (enc_bcr, False),
+
+    # С меткой времени CP56Time2a (Monitoring)
+    AsduTypeId.M_SP_TB_1: (enc_siq, True),
+    AsduTypeId.M_DP_TB_1: (enc_diq, True),
+    AsduTypeId.M_ST_TB_1: (enc_vti, True),
+    AsduTypeId.M_BO_TB_1: (enc_bsi, True),
+    AsduTypeId.M_ME_TD_1: (enc_nva, True),
+    AsduTypeId.M_ME_TE_1: (enc_nva, True),
+    AsduTypeId.M_ME_TF_1: (enc_qds_float, True),
+    AsduTypeId.M_IT_TB_1: (enc_bcr, True),
+    
+    # Системные и команды
+    AsduTypeId.C_IC_NA_1: (lambda ev: bytes([int(ev.val) & 0xFF]), False),
+    AsduTypeId.C_SC_NA_1: (enc_siq, False), # Однокомандное
+    AsduTypeId.C_DC_NA_1: (enc_diq, False), # Двухкомандное
+}
+
+
+def _enc_obj(t_asdu, ev) -> bytes | None:
+    config = ENCODERS.get(t_asdu)
+    if not config:
         return None
+    enc_func, has_ts = config
+    body = int.to_bytes(ev.ioa, 3, 'little')
+    body += enc_func(ev)
+    if has_ts:
+        body += datetime_to_cp56(ev.ts)
     return body
 
 def build_i_frame(state: cm.ClientState, events: list) -> bytes | None:
@@ -30,7 +67,7 @@ def build_i_frame(state: cm.ClientState, events: list) -> bytes | None:
     cot = events[0].cot
     parts = []
     for ev in events:
-        obj = _encode_obj(t_asdu, ev)
+        obj = _enc_obj(t_asdu, ev)
         if obj is None:
             state.log.error(f'Тип ASDU {t_asdu} не поддерживается драйвером')
             return None
@@ -103,8 +140,9 @@ def handle_i_frame(frame: bytes, state: cm.ClientState):
     except IndexError:
         log.error("C->S [ASDU] Ошибка длины: пакет обрезан")
         return None
-             
-    if type_id == const.AsduTypeId['C_IC_NA_1']: # общий опрос
+
+
+    if type_id == AsduTypeId['C_IC_NA_1']: # общий опрос
         if state.on_gi and state.out_que:
             for event in state.on_gi():
                 if event.asdu < 45: # не отправляем в общем опросе ТУ/ТР - можно спросить из конфигурации потом
@@ -112,9 +150,18 @@ def handle_i_frame(frame: bytes, state: cm.ClientState):
             state.out_que.put(cm.IecEvent(id=-1, ioa=0, asdu=100, val=0, ts=datetime.now(), cot=10))
             return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
 
-    if type_id == const.AsduTypeId['C_SC_NA_1']: # команда однопозиционная
+    if type_id == AsduTypeId['C_SC_NA_1']: # команда однопозиционная
         for ioa, data in parsed_obj:
             val = data[0] & 0x01
+            log.info(f'C->S [COMMAND] IOA:{ioa} VAL:{val}')
+            if state.on_command:
+                success = state.on_command(val, ioa)
+                if not success:
+                    log.warning(f'Команда на IOA {ioa} отклонена')
+        return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
+    if type_id == AsduTypeId['C_SE_NC_1']: # команда телерегулирования
+        for ioa, data in parsed_obj:
+            val, qos =  struct.unpack('<fB', data[:5]) 
             log.info(f'C->S [COMMAND] IOA:{ioa} VAL:{val}')
             if state.on_command:
                 success = state.on_command(val, ioa)
