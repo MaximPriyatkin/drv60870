@@ -71,20 +71,23 @@ def _cmd_addr(ctx, args):
 
 def _cmd_set(ctx, args):
     """
-    set <value> <id> [quality] - Set signal by ID.
+    set <value> <id> [quality] [inv_time] - Set signal by ID.
 
     Arguments:
-        value   : Numeric value (float)
-        id      : Signal ID (database number)
-        quality : Optional, decimal (default 0)
-                  0=good, 128=invalid, 64=not topical, 16=blocked, 32=substituted
+        value    : Numeric value (float)
+        id       : Signal ID (database number)
+        quality  : Optional, decimal (default 0)
+                   0=good, 128=invalid, 64=not topical, 16=blocked, 32=substituted
+        inv_time : Optional, 1=invalid timestamp, 0=valid (default 0)
 
     Example:
         > set 100.5 45
         > set 100.5 45 128
+        > set 100.5 45 0 1
     """
     q = int(args[2]) if len(args) > 2 else 0
-    res = ctx.sg.update_val(float(args[0]), id=int(args[1]), q=q)
+    iv = bool(int(args[3])) if len(args) > 3 else False
+    res = ctx.sg.update_val(float(args[0]), id=int(args[1]), q=q, iv=iv)
     if res:
         cm.print_signals(ctx.sg.get_signal(int(args[1])))
 
@@ -235,7 +238,7 @@ def _cmd_help(ctx, _args):
     """
     print("\n=== Available server commands ===\n")
     for name, (n, _) in COMMANDS.items():
-        print(f"  {name}" + (f" <arg1> <arg2> ..." if n else ""))
+        print(f"  {name}" + (" <arg1> <arg2> ..." if n else ""))
     print("\nFor command help: help <command>\n")
 
 

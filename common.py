@@ -15,7 +15,7 @@ import sys
 from fnmatch import fnmatch
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import tomllib
 import queue
@@ -24,6 +24,10 @@ import socket
 from threading import Lock, Event, RLock
 import const
 import csv
+
+_UTC = timezone.utc
+def utcnow() -> datetime:
+    return datetime.now(_UTC)
 
 
 # ---- Driver Configuration Loading ----
@@ -176,17 +180,18 @@ class SignalConf:
     asdu: int
     name: str
     dsc: str = ''
-    val: Any = 0.0
-    ts: datetime = field(default_factory=datetime.now)
-    q: int = 0x00
     threshold: Optional[float] = None
+    conv: str = ''
+    val: Any = 0.0
+    ts: datetime = field(default_factory=utcnow)
+    q: int = 0x00
+    iv: bool = False
+
 
 
 @dataclass
 class IecEvent:
     """IEC 104 event dataclass for queuing and transmission.
-
-    Represents a data point change to be sent to connected clients.
 
     Attributes:
         id: Internal signal identifier.
@@ -195,14 +200,16 @@ class IecEvent:
         val: Current signal value.
         ts: Timestamp of the event.
         q: Quality byte.
+        iv: Invalid time flag (CP56Time2a IV bit).
         cot: Cause of transmission (default 3 = spontaneous).
     """
     id: int
     ioa: int
     asdu: int
     val: Any
-    ts: datetime = field(default_factory=datetime.now)
+    ts: datetime = field(default_factory=utcnow)
     q: int = 0
+    iv: bool = False
     cot: int = 3
 
 
@@ -253,10 +260,11 @@ def create_data_storage():
                 val=sg.val,
                 ts=sg.ts,
                 q=sg.q,
+                iv=sg.iv,
                 cot=20
             )
 
-    def add_signal(id, ioa, asdu, name, val, threshold):
+    def add_signal(id, ioa, asdu, name, threshold):
         """Add a new signal to storage.
 
         Args:
@@ -276,8 +284,7 @@ def create_data_storage():
                 ioa=ioa,
                 asdu=asdu,
                 name=name,
-                val=val,
-                ts=datetime.now(),
+                ts=utcnow(),
                 threshold=threshold
             )
             if ioa in _ioa_idx:
@@ -285,7 +292,7 @@ def create_data_storage():
             _ioa_idx[ioa] = id
             _name_idx[name.lower()] = id
 
-    def update_val(val, *, id=None, ioa=None, q=0, ts=None):
+    def update_val(val, *, id=None, ioa=None, q=0, iv=False, ts=None):
         """Update signal value and notify subscribers if threshold exceeded.
 
         Args:
@@ -293,6 +300,7 @@ def create_data_storage():
             id: Internal signal ID (mutually exclusive with ioa).
             ioa: IOA (mutually exclusive with id).
             q: Quality byte.
+            iv: Invalid time flag (CP56Time2a IV bit).
             ts: Optional timestamp (defaults to now).
 
         Returns:
@@ -311,7 +319,7 @@ def create_data_storage():
             sg = _signals.get(id)
             if not sg:
                 return False
-            q_change = (q != sg.q)
+            q_change = (q != sg.q) or (iv != sg.iv)
             val_change = False
             if sg.threshold is not None:
                 try:
@@ -323,10 +331,11 @@ def create_data_storage():
                 val_change = (val != sg.val)
             if not val_change and not q_change:
                 return False
-            sg.ts = ts or datetime.now()
+            sg.ts = ts or utcnow()
             sg.val = val
             sg.q = q
-            event = IecEvent(id=id, ioa=sg.ioa, asdu=sg.asdu, val=sg.val, ts=sg.ts, q=sg.q)
+            sg.iv = iv
+            event = IecEvent(id=id, ioa=sg.ioa, asdu=sg.asdu, val=sg.val, ts=sg.ts, q=sg.q, iv=sg.iv)
             if sg.asdu >= 45:
                 return True
             targets = list(_subs.values())
@@ -410,7 +419,7 @@ def create_data_storage():
     )
 
 
-def load_signal(add_signal: Callable, ca: int, fname: str = 'signals.csv') -> None:
+def load_signal(add_signal: Callable, ca: int, fname: str = 'iec_addr.csv') -> None:
     """Load signal configuration from CSV file.
 
     Reads signal definitions from a tab-separated CSV file and adds them
@@ -433,7 +442,6 @@ def load_signal(add_signal: Callable, ca: int, fname: str = 'signals.csv') -> No
             if ca != int(row['ca']):
                 continue
             asdu = int(row['asdu'])
-            val = get_val_by_asdu(asdu, row['val'])
             if len(row['threshold']) > 0:
                 threshold = float(row['threshold'])
             else:
@@ -443,7 +451,6 @@ def load_signal(add_signal: Callable, ca: int, fname: str = 'signals.csv') -> No
                 int(row['ioa']),
                 asdu,
                 row['name'],
-                val,
                 threshold
             )
 
@@ -488,7 +495,7 @@ def print_signals(sg_dict: dict) -> None:
     """
     if len(sg_dict) == 0:
         return
-    header = f"{'ID':<8} | {'IOA':<8} | {'TYPE':<6} | {'Name':<35} | {'Value':<8} | {'Q':<4} | {'Timestamp':<23} | {'Threshold'}"
+    header = f"{'ID':<8} | {'IOA':<8} | {'TYPE':<6} | {'Name':<35} | {'Value':<8} | {'Q':<4} | {'IV':<3} | {'Timestamp':<23} | {'Threshold'}"
     separator = "-" * len(header)
     print('\n' + separator)
     print(header)
@@ -496,7 +503,8 @@ def print_signals(sg_dict: dict) -> None:
     for row in sorted(sg_dict.keys()):
         sg = sg_dict[row]
         ts = sg.ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:23] if sg.ts else ''
-        print(f'{row:<8} | {sg.ioa:<8} | {sg.asdu:<6} | {sg.name:<35} | {sg.val:<8} | {sg.q:<4} | {ts:<23} | {sg.threshold}')
+        iv = 'x' if sg.iv else ''
+        print(f'{row:<8} | {sg.ioa:<8} | {sg.asdu:<6} | {sg.name:<35} | {sg.val:<8} | {sg.q:<4} | {iv:<3} | {ts:<23} | {sg.threshold}')
     print(separator)
 
 
@@ -611,9 +619,7 @@ def create_client_storage():
 
 
 def load_connections(path: str = 'config.toml') -> list:
-    """Load connection definitions from config TOML file.
-
-    Reads [[conn]] sections.
+    """Load [[conn]] sections from config TOML file.
 
     Returns:
         List of SimpleNamespace(name, ip, port, ca, auto_start, auto_gi).
@@ -628,4 +634,24 @@ def load_connections(path: str = 'config.toml') -> list:
             auto_gi=c.get('auto_gi', True),
         )
         for c in data.get('conn', [])
+    ]
+
+
+def load_bus_config(path: str = 'config.toml') -> list:
+    """Load [[bus]] sections from config TOML file.
+
+    Returns:
+        List of SimpleNamespace(name, type, host, port, ioa_filter).
+    """
+    with open(path, 'rb') as f:
+        data = tomllib.load(f)
+    return [
+        SimpleNamespace(
+            name=c.get('name', ''),
+            type=c['type'],
+            host=c.get('host', '127.0.0.1'),
+            port=c.get('port', 9000),
+            ioa_filter=c.get('ioa_filter'),
+        )
+        for c in data.get('bus', [])
     ]

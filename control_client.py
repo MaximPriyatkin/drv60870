@@ -171,6 +171,29 @@ def _cmd_load(ctx, _args):
             print(f"Error {c.name}: {e}")
 
 
+def _cmd_bus(ctx, _args):
+    """
+    bus - Show event bus subscribers.
+
+    Displays all active subscribers with their IOA filters.
+
+    Example:
+        > bus
+        1: history (all)
+        2: calc_tcp (ioa: 100, 101, 102)
+    """
+    if not ctx.bus:
+        print('Event bus not available')
+        return
+    subs = ctx.bus.list_subs()
+    if not subs:
+        print('No subscribers')
+        return
+    for sid, (name, ioa_set) in subs.items():
+        f = f"ioa: {', '.join(str(i) for i in sorted(ioa_set))}" if ioa_set else 'all'
+        print(f"  {sid}: {name or '?'} ({f})")
+
+
 def _cmd_help(ctx, _args):
     """
     help - Show list of available client commands.
@@ -191,7 +214,7 @@ def _cmd_help(ctx, _args):
     """
     print("\n=== Available client commands ===\n")
     for name, (n, _) in CLIENT_COMMANDS.items():
-        print(f"  {name}" + (f" <arg1> <arg2> ..." if n else ""))
+        print(f"  {name}" + (" <arg1> <arg2> ..." if n else ""))
     print("\nFor command help: help <command>\n")
 
 
@@ -203,28 +226,23 @@ CLIENT_COMMANDS = {
     "start": (1, _cmd_start),
     "gi": (1, _cmd_gi),
     "load": (0, _cmd_load),
+    "bus": (0, _cmd_bus),
     "help": (0, _cmd_help),
 }
 
 
-def client_handler(stop_thread: Callable, api: Callable, log, prompt_id: str = "client"):
+def client_handler(stop_thread: Callable, api: Callable, log, prompt_id: str = "client", bus=None):
     """
     Command-line handler for the client.
 
-    Runs an infinite loop reading commands from stdin and executing them.
-    Supports commands from CLIENT_COMMANDS dictionary and help <command>.
-
     Args:
         stop_thread: threading.Event to stop the loop
-        api: API object for connection management (connect, disconnect, startdt, gi)
+        api: API object for connection management
         log: Logger instance
-        prompt_id: Identifier for the input prompt (default: "client")
-
-    Example:
-        >>> client_handler(stop_event, api_instance, logger, "plc")
-        plc > conn device1 192.168.1.10 2404 1
+        prompt_id: Identifier for the input prompt
+        bus: Event bus instance (optional)
     """
-    ctx = SimpleNamespace(stop_thread=stop_thread, api=api, log=log)
+    ctx = SimpleNamespace(stop_thread=stop_thread, api=api, log=log, bus=bus)
     prompt = f"{prompt_id} > "
     while not stop_thread.is_set():
         try:

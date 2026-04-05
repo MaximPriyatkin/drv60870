@@ -12,7 +12,6 @@ in the IEC 104 protocol implementation including:
 """
 
 from enum import IntEnum
-from dataclasses import dataclass
 
 # IEC 104 Constants
 START_BYTE = 0x68

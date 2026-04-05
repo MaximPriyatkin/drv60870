@@ -1,27 +1,28 @@
 [nw]
-port = 2405
+port = 2402
 max_clients = 8
 bind_ip = "0.0.0.0"
 allow_ip = ["192.168.2.52", "127.0.0.1"]
 
 [prot]
-ca = 3
+ca = 2
 t3 = 10
-k = 12
+k = 30  # по умолчанию 12
 w = 8
 strict_coa = true
 max_rx_buf = 16384
-send_sleep = 0
 
 [sim]
 sc = "sc.csv"
 
 [sg]
-addr = "signals.csv"
-
+addr = "iec_addr.csv"
 
 [log]
 name = "DRV"
-lvl = "DEBUG"
+file_lvl = "DEBUG"
+console_lvl = ""
 fname = "srv.log"
+backup = 5  # Количество сохраняемых файлов при ротации
+size = 2  # Размер лог-файла в мегабайтах
 i_frame_stats_every = 1000

@@ -6,10 +6,8 @@ No external dependencies, uses only Python standard library.
 """
 
 import os
-import sys
 import time
 import argparse
-from pathlib import Path
 
 
 def find_log_file():
@@ -48,7 +46,6 @@ def read_last_lines(file_obj, num_lines):
             return []
 
         # Read from the end
-        lines = []
         block_size = 8192
         pos = size
         remaining = num_lines

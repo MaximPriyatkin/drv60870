@@ -37,3 +37,16 @@ history_file = "history.tsv"
 # ca = 2
 # auto_start = true
 # auto_gi = true
+
+# [[bus]]
+# name = "calc_module"
+# type = "tcp"              # tcp | udp
+# host = "127.0.0.1"
+# port = 9000
+# ioa_filter = [100, 101, 102]  # optional, omit = all signals
+
+# [[bus]]
+# name = "monitoring"
+# type = "udp"
+# host = "127.0.0.1"
+# port = 9001

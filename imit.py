@@ -127,10 +127,7 @@ def imit_rand(
     if sleep_s is None:
         sleep_s = SIM_SLEEP
 
-    # Rate limiting
-    rate_sleep = (1.0 / max_events_per_sec) if max_events_per_sec and max_events_per_sec > 0 else 0.0
-
-    # Initialize time
+      # Initialize time
     f_time = time.time() if f_time is None else f_time
 
     len_id = len(list_id)

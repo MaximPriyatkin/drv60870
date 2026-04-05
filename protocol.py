@@ -49,7 +49,7 @@ def _enc_obj(t_asdu, ev) -> bytes | None:
         return None
     body = int.to_bytes(ev.ioa, 3, 'little') + data
     if t_asdu in _TS_TYPES:
-        body += datetime_to_cp56(ev.ts)
+        body += datetime_to_cp56(ev.ts, iv=getattr(ev, 'iv', False))
     return body
 
 
@@ -166,7 +166,7 @@ def handle_i_frame(frame: bytes, state: cm.ClientState) -> bytes | None:
     type_id = asdu[0]
     vsq = asdu[1]
     # COT: 2 bytes (little-endian)
-    cot = struct.unpack('<H', asdu[2:4])[0]
+    # cot = struct.unpack('<H', asdu[2:4])[0]
     # COA: 2 bytes (little-endian) after COT
     coa = struct.unpack('<H', asdu[4:6])[0]
 
@@ -224,7 +224,7 @@ def handle_i_frame(frame: bytes, state: cm.ClientState) -> bytes | None:
             for event in state.on_gi():
                 if event.asdu < 45:  # Don't send commands in GI
                     state.out_que.put(event)
-            state.out_que.put(cm.IecEvent(id=-1, ioa=0, asdu=100, val=0, ts=datetime.now(), cot=10))
+            state.out_que.put(cm.IecEvent(id=-1, ioa=0, asdu=100, val=0, ts=cm.utcnow(), cot=10))
             return build_i_frame_ack(state, frame, const.COT.ACTIVATION_CON)
 
     # Handle single command
@@ -332,32 +332,25 @@ def datetime_to_cp56(dt: datetime, iv: bool = False) -> bytes:
 
     CP56Time2a is a 7-byte time format used in IEC 104:
     - 2 bytes: milliseconds in current minute (little-endian)
-    - 1 byte: minute + IV (invalid) flag
-    - 1 byte: hour
-    - 1 byte: day of month + day of week
-    - 1 byte: month
-    - 1 byte: year (last two digits)
+    - 1 byte: minute (bits 0-5) + IV flag (bit 7)
+    - 1 byte: hour (bits 0-4) + SU/DST flag (bit 7)
+    - 1 byte: day of month (bits 0-4) + day of week (bits 5-7)
+    - 1 byte: month (bits 0-3)
+    - 1 byte: year (bits 0-6, offset from 2000)
+
+    Per IEC 60870-5-4, CP56Time2a carries local time (not UTC).
 
     Args:
-        dt: Python datetime object.
+        dt: Python datetime object (should be local time).
         iv: Invalid flag (sets bit 7 of minute byte).
 
     Returns:
         7-byte CP56Time2a representation.
-
-    Example:
-        >>> dt = datetime(2024, 1, 15, 14, 30, 25, 123000)
-        >>> cp56 = datetime_to_cp56(dt)
-        >>> len(cp56)
-        7
     """
-    # Milliseconds in current minute (little-endian)
     ms_total = (dt.second * 1000 + dt.microsecond // 1000) % 60000
-    ms_low = ms_total & 0xFF
-    ms_high = (ms_total >> 8) & 0xFF
     res = bytearray(7)
-    res[0] = ms_low
-    res[1] = ms_high
+    res[0] = ms_total & 0xFF
+    res[1] = (ms_total >> 8) & 0xFF
     res[2] = dt.minute & 0x3F
     if iv:
         res[2] |= 0x80
@@ -399,6 +392,7 @@ def datetime_from_cp56(dt_bt: bytes) -> tuple[datetime | None, bool | None]:
         dt = datetime(year, month, day, hour, mins, sec, microsecond=msec * 1000)
         return dt, iv
     except ValueError as e:
+        print(e)
         return None, None
 
 
@@ -429,7 +423,7 @@ def decode_i_frame_objects(frame: bytes) -> list[tuple]:
     """Decode objects from an I-frame.
 
     Returns:
-        list of (ioa, type_id, value, quality, cot, coa, timestamp|None).
+        list of (ioa, type_id, value, quality, cot, coa, timestamp|None, iv).
     """
     if len(frame) < 12:
         return []
@@ -453,8 +447,8 @@ def decode_i_frame_objects(frame: bytes) -> list[tuple]:
             for i in range(count):
                 d = asdu[offset:offset+val_size]
                 val, q = _dec_val(type_id, d)
-                ts = datetime_from_cp56(d[val_size-7:])[0] if type_id in _TS_TYPES else None
-                results.append((base_ioa + i, type_id, val, q, cot, coa, ts))
+                ts, iv = datetime_from_cp56(d[val_size-7:]) if type_id in _TS_TYPES else (None, False)
+                results.append((base_ioa + i, type_id, val, q, cot, coa, ts, iv))
                 offset += val_size
         else:
             for _ in range(count):
@@ -462,8 +456,8 @@ def decode_i_frame_objects(frame: bytes) -> list[tuple]:
                 offset += 3
                 d = asdu[offset:offset+val_size]
                 val, q = _dec_val(type_id, d)
-                ts = datetime_from_cp56(d[val_size-7:])[0] if type_id in _TS_TYPES else None
-                results.append((ioa, type_id, val, q, cot, coa, ts))
+                ts, iv = datetime_from_cp56(d[val_size-7:]) if type_id in _TS_TYPES else (None, False)
+                results.append((ioa, type_id, val, q, cot, coa, ts, iv))
                 offset += val_size
     except (IndexError, struct.error):
         pass
@@ -471,7 +465,7 @@ def decode_i_frame_objects(frame: bytes) -> list[tuple]:
 
 
 if __name__ == '__main__':
-    b = datetime_to_cp56(datetime.now())
+    b = datetime_to_cp56(cm.utcnow())
     print(b)
     c = datetime_from_cp56(b)
     print(c)

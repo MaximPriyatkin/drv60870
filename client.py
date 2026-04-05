@@ -2,13 +2,13 @@ import socket
 import struct
 import queue
 import time
-from datetime import datetime
 from threading import Thread, Event, Lock
 from types import SimpleNamespace
 
 import common as cm
 import const
 import protocol as prt
+import event_bus as eb
 from control_client import client_handler
 
 MAX_CONNECTIONS = 8
@@ -19,14 +19,14 @@ def create_history_writer(filename: str):
     _lock = Lock()
     _file = open(filename, 'a', encoding='utf-8')
     if _file.tell() == 0:
-        _file.write("timestamp\tsession\tioa\tasdu\tvalue\tquality\tcot\n")
+        _file.write("timestamp\tsession\tioa\tasdu\tvalue\tquality\tiv\tcot\n")
         _file.flush()
 
     def write(session_name: str, objects: list):
         with _lock:
-            for ioa, asdu, val, q, cot, _coa, ts in objects:
-                ts_str = ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:23] if ts else datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:23]
-                _file.write(f"{ts_str}\t{session_name}\t{ioa}\t{asdu}\t{val}\t{q}\t{cot}\n")
+            for ioa, asdu, val, q, cot, _coa, ts, iv in objects:
+                ts_str = ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:23] if ts else cm.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:23]
+                _file.write(f"{ts_str}\t{session_name}\t{ioa}\t{asdu}\t{val}\t{q}\t{int(iv)}\t{cot}\n")
             _file.flush()
 
     def close():
@@ -423,15 +423,35 @@ def shutdown_client(stop_thread: Event, pool, log):
     pool.close_all()
     log.info("Client stopped")
 
+def setup_bus(conf, log):
+    """Create event bus and register subscribers from config."""
+    bus = eb.create_event_bus(log)
+    if conf.history_file:
+        hw = create_history_writer(conf.history_file)
+        bus.subscribe(hw.write, name='history', close_fn=hw.close)
+    for bc in cm.load_bus_config():
+        try:
+            if bc.type == 'tcp':
+                s = eb.create_tcp_sender(bc.host, bc.port)
+            elif bc.type == 'udp':
+                s = eb.create_udp_sender(bc.host, bc.port)
+            else:
+                log.warning(f"Bus: unknown type '{bc.type}' for '{bc.name}'")
+                continue
+            bus.subscribe(s.send, ioa_filter=bc.ioa_filter, name=bc.name, close_fn=s.close)
+        except Exception as e:
+            log.error(f"Bus subscriber '{bc.name}' init failed: {e}")
+    return bus
+
+
 def main():
     """Main entry point for the client application."""
     conf = cm.load_config()
     log = cm.setup_logging(conf)
     stop_thread = Event()
     pool = create_client_pool()
-    history = create_history_writer(conf.history_file) if conf.history_file else None
-    api = create_client_api(pool, conf, log, history.write if history else None)
-    # Auto-connect from config
+    bus = setup_bus(conf, log)
+    api = create_client_api(pool, conf, log, on_data=bus.publish)
     for c in cm.load_connections():
         try:
             api.connect(c.name, c.ip, c.port, c.ca)
@@ -442,13 +462,12 @@ def main():
                 api.gi(c.name)
         except Exception as e:
             log.error(f"Auto-connect {c.name} failed: {e}")
-    Thread(target=client_handler, args=(stop_thread, api, log, conf.log_name), daemon=True).start()
+    Thread(target=client_handler, args=(stop_thread, api, log, conf.log_name, bus), daemon=True).start()
     try:
         run_client_loop(stop_thread, pool, log)
     finally:
         shutdown_client(stop_thread, pool, log)
-        if history:
-            history.close()
+        bus.close()
 
 if __name__ == "__main__":
     main()

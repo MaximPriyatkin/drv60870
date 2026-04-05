@@ -29,6 +29,8 @@ drv60870/
 ├── const.py           # protocol constants
 ├── control_client.py  # client CLI commands
 ├── control_server.py  # server CLI commands
+├── event_bus.py       # event bus with IOA filtering, TCP/UDP senders
+├── bus_client.py      # simple TCP/UDP bus listener (test tool)
 ├── gen_dpl.py         # DPL generator for WinCC OA
 ├── imit.py            # signal simulation generators
 ├── log_viewer.py      # log viewer
@@ -40,6 +42,7 @@ drv60870/
 ├── PU_1/, PU_2/, PU_3/ # SCADA driver instance directories
 │   ├── config.toml
 │   └── run.cmd
+├── test_protocol.py   # unit tests for protocol functions
 ├── readme.md
 └── todo.md
 ```
@@ -53,6 +56,8 @@ drv60870/
   - client: `history_file` — TSV file for signal change history
   - `[[conn]]` — connection definitions for auto-connect (client only):
     - `name`, `ip`, `port`, `ca`, `auto_start`, `auto_gi`
+  - `[[bus]]` — event bus subscribers (client only):
+    - `name`, `type` (`tcp`|`udp`), `host`, `port`, `ioa_filter` (optional list of IOA)
 - `signals.csv`:
   - signal fields: `id`, `ca`, `ioa`, `asdu`, `name`, `val`, `threshold`
 
@@ -79,7 +84,7 @@ Server (`control_server.py`):
 
 - `clients`
 - `addr <name_pattern>`
-- `set <value> <id> [quality]`
+- `set <value> <id> [quality] [inv_time]`
 - `setioa <value> <ioa>`
 - `imit_rand <cnt_time> <cnt_id>`
 - `imit_ladder <cnt_step> <time_step> <val_step> <val_min> <val_max> <name_pattern>`
@@ -93,6 +98,7 @@ Client (`control_client.py`):
 - `gi <name>`
 - `disc <name>`
 - `load` — auto-connect from `[[conn]]` in config.toml
+- `bus` — show event bus subscribers
 - `clients`
 - `help`, `exit`
 

@@ -1,11 +1,11 @@
 [nw]
-port = 2404
+port = 2401
 max_clients = 8
 bind_ip = "0.0.0.0"
 allow_ip = ["192.168.2.52", "127.0.0.1"]
 
 [prot]
-ca = 2
+ca = 1
 t3 = 10
 k = 30  # по умолчанию 12
 w = 8
@@ -16,7 +16,7 @@ max_rx_buf = 16384
 sc = "sc.csv"
 
 [sg]
-addr = "signals.csv"
+addr = "iec_addr.csv"
 
 [log]
 name = "DRV"

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Server implementation for IEC 104 protocol simulator.
 
@@ -22,7 +23,6 @@ import time
 import const
 import common as cm
 import protocol as prt
-import imit as im
 from control_server import server_handler
 
 # state in client_send/client_rec is always initialized
